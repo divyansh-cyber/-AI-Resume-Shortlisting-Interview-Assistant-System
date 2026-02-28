@@ -6,7 +6,10 @@ A production-ready TypeScript/Node.js API that automates the end-to-end candidat
 
 ## Table of Contents
 
-- [Architecture Overview](#architecture-overview)
+- [System Architecture](#system-architecture)
+- [Data Strategy](#data-strategy)
+- [AI Strategy](#ai-strategy)
+- [Scalability](#scalability)
 - [Technology Stack](#technology-stack)
 - [Project Structure](#project-structure)
 - [Getting Started](#getting-started)
@@ -23,38 +26,266 @@ A production-ready TypeScript/Node.js API that automates the end-to-end candidat
 - [Verification Engine](#verification-engine)
 - [Interview Question Generator](#interview-question-generator)
 - [Testing](#testing)
-- [Commit History](#commit-history)
 
 ---
 
-## Architecture Overview
+## System Architecture
+
+### Component Interaction Diagram
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│                          REST API (Express)                          │
-│   POST /api/jobs          POST /api/evaluations                      │
-│   GET  /api/jobs/:id      GET  /api/evaluations/:id                  │
-└───────────────┬──────────────────────┬───────────────────────────────┘
-                │                      │ 202 Accepted (async)
-                ▼                      ▼
-        ┌──────────────┐     ┌─────────────────────────┐
-        │ Job Parser   │     │  Evaluation Pipeline     │
-        │ (Gemini LLM) │     │                          │
-        └──────┬───────┘     │  1. PDF Extraction       │
-               │             │  2. Resume Parsing (LLM) │
-               ▼             │  3. Scoring Engine       │
-        ┌──────────────┐     │  4. Verification Engine  │
-        │  PostgreSQL  │◄────│  5. Tier Classification  │
-        │  (job + eval │     │  6. Question Generation  │
-        │   + resume)  │     └─────────────────────────┘
-        └──────────────┘
-               ▲
-        ┌──────────────┐
-        │    Redis     │  ← embedding cache, GitHub API cache
-        └──────────────┘
+ ┌──────────────────────────────────────────────────────────────────────────┐
+ │                           REST API  (Express)                            │
+ │  POST /api/jobs              POST /api/evaluations                        │
+ │  GET  /api/jobs/:id          GET  /api/evaluations/:id                    │
+ └────────────┬─────────────────────────────┬─────────────────────────────-─┘
+              │ synchronous                 │ 202 Accepted — async
+              ▼                             ▼
+ ┌────────────────────┐       ┌─────────────────────────────────────────────┐
+ │    Parser Service  │       │             Evaluation Pipeline              │
+ │                    │       │                                              │
+ │  pdf-parse         │       │  Stage 1 ── PDF Extractor                   │
+ │      │             │       │               (pdf-parse → raw text)         │
+ │      ▼             │       │                    │                         │
+ │  Gemini 1.5 Pro    │       │  Stage 2 ── Resume Parser                   │
+ │  (JSON mode)       │       │               (Gemini LLM → ParsedResume)   │
+ │      │             │       │                    │                         │
+ │      ▼             │       │  Stage 3 ── Scoring Engine  ◄───── Redis    │
+ │  JobDescription    │       │  ┌─────────────────────────────────────┐    │
+ │  (structured)      │       │  │  ExactMatch  Semantic  Achiev  Own  │    │
+ └────────┬───────────┘       │  │  Scorer      Scorer    Scorer  Scor │    │
+          │                   │  │               ▲                      │    │
+          ▼                   │  │          Embedding API               │    │
+ ┌────────────────────┐       │  │          (text-embedding-004)        │    │
+ │     PostgreSQL     │       │  └─────────────────────────────────────┘    │
+ │                    │◄──────│                    │                         │
+ │  jobs              │       │  Stage 4 ── Verification Engine             │
+ │  candidates        │       │  ┌──────────────────────────────────┐       │
+ │  resumes           │       │  │  GitHub Verifier  LinkedIn Probe │       │
+ │  evaluations       │       │  │  (Octokit + Redis cache)         │       │
+ └────────────────────┘       │  └──────────────────────────────────┘       │
+          ▲                   │                    │                         │
+ ┌────────────────────┐       │  Stage 5 ── Tier Classifier                 │
+ │       Redis        │       │               (deterministic, no LLM)       │
+ │                    │       │                    │                         │
+ │  embeddings cache  │       │  Stage 6 ── Question Generator              │
+ │  GitHub API cache  │       │               (Gemini 1.5 Pro, temp 0.4)    │
+ └────────────────────┘       └─────────────────────────────────────────────┘
 ```
 
-The evaluation endpoint returns **202 Accepted** immediately with an `evaluationId`. The six-stage pipeline runs asynchronously in the background; the client polls `GET /api/evaluations/:id` to check `status` (`pending → scoring → verifying → generating → complete | failed`).
+### How the Four Core Services Interact
+
+**Parser Service → Scoring Engine**
+The Parser Service converts unstructured text (PDF or raw JD string) into two strongly-typed domain objects — `ParsedResume` and `JobDescription` — that serve as the shared contract between all downstream services. The Scoring Engine consumes both objects without touching raw text.
+
+**Scoring Engine → Tier Classifier**
+The Scoring Engine produces a `ScoreCard` containing four `DimensionScore` objects and a weighted `overallScore`. The Tier Classifier is a pure, deterministic function that reads only `overallScore` from the `ScoreCard` and outputs a `TierClassification`. No LLM is involved at this stage.
+
+**Scoring Engine + Verification Engine → Question Generator**
+The Question Generator receives the full `ScoreCard`, `TierClassification`, and `VerificationResult` from the previous two stages. It uses the scoring gaps and unverified claims as context in the Gemini prompt, so generated questions are specific to that candidate's weaknesses.
+
+**Verification Engine (parallel)**
+The Verification Engine runs as `Promise.allSettled([githubVerify, linkedinProbe])` — both checks run concurrently and neither can fail the other. A failed GitHub API call (rate limit, network error) is caught and returns a graceful `{ verified: false, reason: '...' }` without blocking the pipeline.
+
+**Async Pipeline with Status Tracking**
+When `POST /api/evaluations` is called the API immediately responds `202 Accepted` with an `evaluationId` and spawns the pipeline in the background. Each stage calls `evaluationRepository.updateStatus()` so clients can observe the transition: `pending → scoring → verifying → generating → complete | failed`.
+
+---
+
+## Data Strategy
+
+### Unstructured PDF → Structured JSON
+
+Converting raw PDF files to structured, queryable data happens in two sequential steps:
+
+**Step 1 — Text Extraction (`pdf-parse`)**
+
+The uploaded PDF binary is passed to `pdf-parse` which strips formatting and returns plain UTF-8 text. No OCR is involved — `pdf-parse` works on text-layer PDFs (covers the vast majority of modern resumes). The raw text is stored in the database as-is for audit and re-parsing purposes.
+
+**Step 2 — LLM Structured Extraction (Gemini 1.5 Pro, JSON mode)**
+
+The raw text is sent to Gemini 1.5 Pro with a system prompt that instructs it to return a strict JSON object matching the `ParsedResume` schema. The Gemini API is called with `responseMimeType: "application/json"` which enables JSON mode — the model is constrained to emit valid JSON and never produces prose outside the JSON envelope.
+
+The system prompt includes:
+- The exact TypeScript interface as a comment (field names, types, and descriptions)
+- Instructions to set fields to `null` when information is absent rather than hallucinating
+- A worked example input/output pair for few-shot grounding
+
+The returned JSON is then validated with a Zod schema before being persisted. If validation fails the evaluation is marked `failed` with a descriptive error — raw Gemini output is never stored directly.
+
+**Why this approach is robust:**
+- Zod validation catches any schema drift between the prompt and the codebase at runtime
+- `null` fields are legal — the system degrades gracefully for incomplete resumes (no phone, no GitHub)
+- Raw text is retained so re-parsing with an improved prompt never requires re-uploading the file
+
+```
+PDF binary
+    │
+    ▼  pdf-parse
+Raw UTF-8 text  ──► stored as resume.rawText
+    │
+    ▼  Gemini 1.5 Pro (JSON mode) + Zod validation
+ParsedResume {                    ┐
+  skills: { technical, soft }    │
+  experience: WorkExperience[]   │  ← validated, typed, persisted
+  education: Education[]         │
+  achievements: string[]         │
+  githubUrl, linkedinUrl         ┘
+}
+```
+
+### Job Description Strategy
+
+Job descriptions follow the same two-step process (raw text → Gemini → Zod → `JobDescription`). The JD is stored once and reused for every candidate evaluation against that job. Parsed fields include:
+- `requirements.mustHave` — hard-required skills (used by ExactMatch Scorer)
+- `requirements.niceToHave` — bonus skills
+- `requirements.contextualPhrases` — seniority/leadership signals (used by Ownership Scorer)
+- `responsibilities` — free-text list (used by Semantic Scorer)
+
+---
+
+## AI Strategy
+
+### LLM: Google Gemini 1.5 Pro
+
+Gemini 1.5 Pro is used for all generative tasks:
+
+| Task | Why Gemini 1.5 Pro |
+|---|---|
+| Resume + JD parsing | 1M-token context window handles any resume length; JSON mode guarantees structured output |
+| Interview question generation | Strong instruction-following with `temperature: 0.4` for controlled creativity |
+| Prompt injection defence | System prompt injected as a user+model turn pair (Gemini 1.5 does not have a native system role), preventing role-confusion attacks |
+
+### Embedding Model: `text-embedding-004`
+
+Google's `text-embedding-004` is used for the Semantic Similarity dimension:
+- **Task type `RETRIEVAL_DOCUMENT`** for the resume text (indexed side)
+- **Task type `RETRIEVAL_QUERY`** for the JD text (query side)
+- Embeddings are **1536-dimensional** vectors; cosine similarity is computed in-process with a simple dot-product loop (no vector DB needed at this scale)
+
+### Semantic Similarity: Handling Kafka → RabbitMQ and Similar Equivalences
+
+Pure embedding-based similarity alone can conflate unrelated technologies. The system uses a **two-layer approach**:
+
+**Layer 1 — Alias Table (ExactMatch Scorer)**
+
+A hand-curated alias map normalises technology synonyms before keyword matching:
+```
+postgres  → postgresql
+pg        → postgresql
+k8s       → kubernetes
+tf        → terraform
+ap kafka  → kafka
+```
+This ensures `postgres` in a resume matches `postgresql` in the JD with 100% confidence.
+
+**Layer 2 — Semantic Groups (SemanticSimilarity Scorer)**
+
+A `SEMANTIC_GROUPS` map clusters functionally equivalent technologies:
+```typescript
+'message-queue': ['kafka', 'rabbitmq', 'kinesis', 'sqs', 'pubsub', 'nats'],
+'relational-db': ['postgresql', 'mysql', 'mssql', 'oracle'],
+'container-orch': ['kubernetes', 'k8s', 'ecs', 'nomad'],
+```
+When the embedding similarity between a resume skill and a JD skill falls below a threshold but both appear in the same semantic group, a partial credit score is awarded. This means a candidate with **RabbitMQ** experience gets a meaningful (not zero) score against a JD that asks for **Kafka**, reflecting genuine transferability.
+
+**Why embeddings + groups beats embeddings alone:**
+- Raw embeddings can score `Redis` and `Kafka` similarly (both are infrastructure), creating false positives
+- The semantic group acts as a guard: only technologies in the same functional cluster receive partial credit
+- The exact-match layer handles the unambiguous cases (alias normalisation), leaving the embedding layer to handle true conceptual distance
+
+### Safety Settings
+
+All Gemini calls use `BLOCK_NONE` safety thresholds for all four harm categories. This is intentional — resume text may contain benign content that triggers false positives in safety filters (e.g. describing security research, military experience, medical terminology).
+
+---
+
+## Scalability
+
+### Current Architecture Capacity
+
+The current single-instance deployment can comfortably process ~200–500 evaluations/hour because each evaluation makes 3–5 Gemini API calls (PDF parse + resume parse + embedding + question generation) and the bottleneck is Gemini API throughput, not the application server.
+
+To reach **10,000+ resumes per day** (~420/hour peak) the following changes are required:
+
+### 1. Decouple the Pipeline with a Job Queue
+
+Replace the in-process background `Promise` with a durable job queue:
+
+```
+POST /api/evaluations
+    │
+    ▼  enqueue job
+┌──────────────┐     ┌─────────────────────────────────────────────┐
+│  API server  │────►│  Queue  (BullMQ / Redis Streams / SQS)       │
+│  (thin layer)│     └───────────────────┬─────────────────────────┘
+└──────────────┘                         │  N workers pull jobs
+                                         ▼
+                        ┌────────────────────────────┐
+                        │  Worker pool (N instances)  │
+                        │  run evaluation pipeline    │
+                        └────────────────────────────┘
+```
+
+**BullMQ** (backed by Redis) is the recommended choice — it supports retry-with-backoff, dead-letter queues, job prioritisation, and rate limiting per queue, all of which are needed to stay within Gemini API quotas.
+
+### 2. Horizontal Worker Scaling
+
+Workers are stateless (all state lives in PostgreSQL + Redis) so they can be scaled horizontally behind a Kubernetes `Deployment`:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: evaluation-worker
+spec:
+  replicas: 10          # tune based on Gemini quota
+  template:
+    spec:
+      containers:
+        - name: worker
+          image: jane-health-api
+          command: ["node", "dist/worker.js"]  # separate entry point
+```
+
+At 10 workers × 3 evaluations/min each = **1,800 evaluations/hour = 43,200/day**, well above the 10,000 target.
+
+### 3. Database Scaling
+
+| Concern | Solution |
+|---|---|
+| Write throughput | Connection pooling via `PgBouncer` in transaction mode |
+| Read throughput | Read replicas for `GET /api/evaluations` and leaderboard queries |
+| Storage growth | Partition `evaluations` table by `created_at` month; archive old partitions to S3 |
+| Index strategy | `idx_evaluations_job_id_score` (covering index) for ranked listing queries |
+
+### 4. Embedding Cache
+
+Embedding generation is the most expensive per-call operation (latency + cost). The system already caches embeddings in Redis keyed by `sha256(text)`. At scale:
+- Set Redis `maxmemory-policy: allkeys-lru` so the cache self-manages
+- For resumes, embeddings are invalidated only when the source text changes (re-parse)
+- For JDs, embeddings are computed once at creation and never recomputed
+
+At 10,000 resumes/day with a ~30% cache hit rate (similar candidates applying to the same job), this eliminates ~3,000 Gemini embedding API calls/day.
+
+### 5. Rate Limit Management
+
+Gemini API has per-minute request and token quotas. At scale:
+- The BullMQ queue is configured with a **rate limiter** (`max: N jobs per minute`) matching the Gemini quota
+- Each worker uses the exponential back-off `retry` utility (`src/utils/retry.ts`) to handle `429` responses without crashing
+- Quota upgrades can be requested from Google Cloud once usage is established
+
+### 6. Scalability Summary
+
+| Component | Current (single instance) | At 10K/day |
+|---|---|---|
+| API servers | 1 | 2–3 (load balanced) |
+| Worker processes | in-process async | 10 worker pods (K8s) |
+| Queue | none (in-process) | BullMQ on Redis |
+| PostgreSQL | single instance | primary + 1 read replica |
+| Redis | single instance | Redis Cluster or ElastiCache |
+| Gemini API | shared quota | dedicated project quota |
+| Estimated throughput | ~500/day | 40,000+/day |
 
 ---
 
@@ -521,27 +752,4 @@ npx jest --testPathPattern="tests/integration"
 
 Integration tests mock all database and LLM dependencies via `jest.mock`, so no live services are required to run the suite.
 
----
 
-## Commit History
-
-The project was built in **10 atomic stages**:
-
-| Stage | Commit Message | Description |
-|---|---|---|
-| 1 | `chore: init project scaffold` | package.json, tsconfig, Docker, configs, utils |
-| 2 | `feat: define domain models and data contracts` | TypeScript interfaces + Zod schemas |
-| 3 | `feat: database layer — PostgreSQL schema + Redis client` | pg pool, ioredis, migrations, repositories |
-| 4 | `feat: parser service — PDF extraction + Gemini LLM structured output` | pdf-parse, Gemini client, resume/job parsers |
-| 5 | `feat: scoring engine — 4-dimensional multi-modal scoring` | exactMatch, semantic, achievement, ownership scorers + orchestrator |
-| 6 | `feat: verification engine — GitHub + LinkedIn profile corroboration` | Octokit-based GitHub verifier, LinkedIn probe, parallel runner |
-| 7 | `feat: tier classifier + Gemini interview question generator` | deterministic tier logic, LLM question generation |
-| 8 | `feat: REST API layer — jobs + evaluations endpoints with async pipeline` | Express app, middleware, controllers, routes |
-| 9 | `test: unit + integration test suite (93 tests passing)` | Jest + ts-jest + supertest, all mocked |
-| 10 | `docs: README and project documentation` | This file |
-
----
-
-## License
-
-MIT
