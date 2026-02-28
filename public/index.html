@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Resume Shortlisting System</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --border: #2e3350;
+      --accent: #6c63ff;
+      --accent-dim: #4d46cc;
+      --green: #22c55e;
+      --red: #ef4444;
+      --yellow: #f59e0b;
+      --text: #e2e8f0;
+      --text-dim: #8892a4;
+      --radius: 12px;
+      --shadow: 0 4px 24px rgba(0,0,0,0.4);
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 32px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    header .logo { font-size: 22px; font-weight: 700; color: var(--accent); }
+    header .subtitle { font-size: 13px; color: var(--text-dim); margin-left: auto; }
+    .status-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 6px var(--green);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+    /* ── Layout ── */
+    .container {
+      display: flex;
+      flex: 1;
+      max-width: 1200px;
+      margin: 0 auto;
+      width: 100%;
+      padding: 32px 24px;
+      gap: 28px;
+    }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      width: 220px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      position: sticky;
+      top: 80px;
+      align-self: flex-start;
+    }
+    .sidebar h3 {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text-dim);
+      padding: 0 12px 8px;
+    }
+    .step-btn {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      background: transparent;
+      color: var(--text-dim);
+      width: 100%;
+      text-align: left;
+      transition: all 0.15s;
+    }
+    .step-btn:hover { background: var(--surface2); color: var(--text); }
+    .step-btn.active { background: var(--accent); color: #fff; }
+    .step-btn .num {
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.1);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 700; flex-shrink: 0;
+    }
+    .step-btn.active .num { background: rgba(255,255,255,0.2); }
+    .step-btn.done .num { background: var(--green); color: #fff; }
+    .step-btn.done { color: var(--text); }
+
+    /* context ids pill */
+    .ctx-box {
+      margin-top: 20px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 12px;
+    }
+    .ctx-box h4 { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 8px; }
+    .ctx-item { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
+    .ctx-item label { color: var(--text-dim); }
+    .ctx-item span {
+      font-family: monospace;
+      color: var(--accent);
+      font-size: 11px;
+      word-break: break-all;
+      cursor: pointer;
+    }
+    .ctx-item span:hover { text-decoration: underline; }
+
+    /* ── Main panel ── */
+    .main { flex: 1; display: flex; flex-direction: column; gap: 0; }
+
+    .tab-panel { display: none; }
+    .tab-panel.active { display: flex; flex-direction: column; gap: 20px; }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      box-shadow: var(--shadow);
+    }
+    .card h2 { font-size: 18px; margin-bottom: 4px; }
+    .card .desc { font-size: 13px; color: var(--text-dim); margin-bottom: 20px; }
+
+    /* ── Form ── */
+    .form-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+    label { font-size: 13px; font-weight: 500; color: var(--text-dim); }
+    input[type="text"], textarea, input[type="file"] {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      color: var(--text);
+      font-size: 14px;
+      font-family: inherit;
+      transition: border-color 0.15s;
+      width: 100%;
+    }
+    input[type="text"]:focus, textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    textarea { resize: vertical; min-height: 120px; }
+    input[type="file"] { padding: 8px 12px; cursor: pointer; }
+
+    /* ── Buttons ── */
+    .btn {
+      padding: 10px 22px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-dim); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-ghost {
+      background: transparent; color: var(--accent);
+      border: 1px solid var(--accent);
+    }
+    .btn-ghost:hover { background: rgba(108,99,255,0.1); }
+
+    /* ── Alerts ── */
+    .alert {
+      padding: 12px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+    .alert-success { background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.3); color: var(--green); }
+    .alert-error   { background: rgba(239,68,68,0.1);  border: 1px solid rgba(239,68,68,0.3);  color: var(--red); }
+    .alert-info    { background: rgba(108,99,255,0.1); border: 1px solid rgba(108,99,255,0.3); color: var(--accent); }
+    .alert-warn    { background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.3); color: var(--yellow); }
+
+    /* ── Response / scorecard display ── */
+    .result-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      margin-top: 4px;
+    }
+    .score-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+    .score-card .score-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 6px; }
+    .score-card .score-value { font-size: 28px; font-weight: 700; }
+    .score-card .score-bar-wrap { height: 4px; background: var(--border); border-radius: 2px; margin-top: 8px; }
+    .score-card .score-bar { height: 4px; border-radius: 2px; transition: width 1s; }
+    .score-high  { color: var(--green); }
+    .bar-high    { background: var(--green); }
+    .score-mid   { color: var(--yellow); }
+    .bar-mid     { background: var(--yellow); }
+    .score-low   { color: var(--red); }
+    .bar-low     { background: var(--red); }
+
+    .tier-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border-radius: 99px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .tier-A { background: rgba(34,197,94,0.15); color: var(--green); }
+    .tier-B { background: rgba(245,158,11,0.15); color: var(--yellow); }
+    .tier-C { background: rgba(239,68,68,0.15);  color: var(--red); }
+
+    .question-list { list-style: none; display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+    .question-list li {
+      padding: 10px 14px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .q-type { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px; margin-bottom: 4px; }
+    .q-type-technical { color: var(--accent); }
+    .q-type-behavioral { color: var(--yellow); }
+    .q-type-situational { color: var(--green); }
+
+    .json-block {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      font-family: monospace;
+      font-size: 12px;
+      overflow-x: auto;
+      max-height: 280px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      color: #a5f3fc;
+    }
+
+    /* spinner */
+    .spinner {
+      width: 18px; height: 18px;
+      border: 2px solid rgba(255,255,255,0.2);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      display: inline-block;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .poll-status {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 13px; color: var(--text-dim);
+    }
+
+    /* raw json toggle */
+    details summary {
+      cursor: pointer;
+      font-size: 12px;
+      color: var(--text-dim);
+      padding: 6px 0;
+      user-select: none;
+    }
+
+    /* section header */
+    .section-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: .8px;
+      margin-bottom: 10px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    @media (max-width: 768px) {
+      .container { flex-direction: column; }
+      .sidebar { width: 100%; position: static; flex-direction: row; flex-wrap: wrap; }
+      .result-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="status-dot"></div>
+  <div class="logo">🤖 Resume AI</div>
+  <div class="subtitle">Powered by Grok (xAI) · Jane Health Assignment</div>
+</header>
+
+<div class="container">
+  <!-- Sidebar nav -->
+  <aside class="sidebar">
+    <h3>Workflow</h3>
+    <button class="step-btn active" id="nav-1" onclick="switchTab(1)">
+      <span class="num">1</span> Create Job
+    </button>
+    <button class="step-btn" id="nav-2" onclick="switchTab(2)">
+      <span class="num">2</span> Submit Resume
+    </button>
+    <button class="step-btn" id="nav-3" onclick="switchTab(3)">
+      <span class="num">3</span> View Evaluation
+    </button>
+
+    <div class="ctx-box" id="ctx-box" style="display:none">
+      <h4>Session IDs</h4>
+      <div class="ctx-item" id="ctx-job" style="display:none">
+        <label>Job ID</label>
+        <span id="ctx-job-id" title="Click to copy" onclick="copyText(this)"></span>
+      </div>
+      <div class="ctx-item" id="ctx-eval" style="display:none">
+        <label>Evaluation ID</label>
+        <span id="ctx-eval-id" title="Click to copy" onclick="copyText(this)"></span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main panels -->
+  <main class="main">
+
+    <!-- ── Tab 1: Create Job ── -->
+    <div class="tab-panel active" id="tab-1">
+      <div class="card">
+        <h2>Step 1 · Create a Job</h2>
+        <p class="desc">Paste a job description. Grok will parse it into structured requirements stored in the database.</p>
+
+        <div class="form-group">
+          <label for="job-title">Job Title *</label>
+          <input type="text" id="job-title" placeholder="e.g. Senior Backend Engineer" value="Senior Backend Engineer" />
+        </div>
+        <div class="form-group">
+          <label for="job-company">Company</label>
+          <input type="text" id="job-company" placeholder="e.g. Acme Corp" value="Acme Corp" />
+        </div>
+        <div class="form-group">
+          <label for="job-raw">Job Description Text *</label>
+          <textarea id="job-raw" placeholder="Paste the full JD here…">We are looking for a Senior Backend Engineer with 4+ years of experience in TypeScript, Node.js, PostgreSQL, and Redis. You will design and build RESTful APIs, own microservices end-to-end, and mentor junior engineers. Experience with Kubernetes and Docker is a bonus. Strong understanding of distributed systems, message queues like Kafka or RabbitMQ, and CI/CD pipelines is expected.</textarea>
+        </div>
+
+        <button class="btn btn-primary" id="btn-create-job" onclick="createJob()">
+          Create Job &rarr;
+        </button>
+        <div id="job-result" style="margin-top:16px"></div>
+      </div>
+    </div>
+
+    <!-- ── Tab 2: Submit Resume ── -->
+    <div class="tab-panel" id="tab-2">
+      <div class="card">
+        <h2>Step 2 · Submit a Resume</h2>
+        <p class="desc">Upload a resume PDF (or text file as PDF). The system will extract, parse, score, and verify it against the job.</p>
+
+        <div class="form-group">
+          <label for="eval-job-id">Job ID *</label>
+          <input type="text" id="eval-job-id" placeholder="Paste Job ID from Step 1" />
+        </div>
+        <div class="form-group">
+          <label for="resume-file">Resume File * <span style="color:var(--text-dim);font-weight:400">(PDF only, max 5MB)</span></label>
+          <input type="file" id="resume-file" accept=".pdf" />
+        </div>
+
+        <button class="btn btn-primary" id="btn-submit-resume" onclick="submitResume()">
+          Submit &amp; Evaluate &rarr;
+        </button>
+        <div id="eval-result" style="margin-top:16px"></div>
+      </div>
+    </div>
+
+    <!-- ── Tab 3: View Evaluation ── -->
+    <div class="tab-panel" id="tab-3">
+      <div class="card">
+        <h2>Step 3 · View Evaluation</h2>
+        <p class="desc">Fetch or poll the evaluation result. The pipeline runs asynchronously — click <em>Refresh</em> until status is <strong>complete</strong>.</p>
+
+        <div class="form-group">
+          <label for="view-eval-id">Evaluation ID *</label>
+          <input type="text" id="view-eval-id" placeholder="Paste Evaluation ID from Step 2" />
+        </div>
+
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn btn-primary" onclick="fetchEvaluation()">Fetch Result</button>
+          <button class="btn btn-ghost" id="btn-autopoll" onclick="toggleAutoPoll()">▶ Auto-poll every 5s</button>
+        </div>
+        <div id="poll-status" style="margin-top:12px"></div>
+        <div id="eval-display" style="margin-top:16px"></div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+/* ── State ── */
+let sessionJobId   = null;
+let sessionEvalId  = null;
+let autopollTimer  = null;
+let isPolling      = false;
+
+/* ── Tab switching ── */
+function switchTab(n) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.step-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + n).classList.add('active');
+  document.getElementById('nav-' + n).classList.add('active');
+}
+
+/* ── Utilities ── */
+function setHtml(id, html) { document.getElementById(id).innerHTML = html; }
+function alert(id, type, msg) {
+  setHtml(id, `<div class="alert alert-${type}">${msg}</div>`);
+}
+function copyText(el) {
+  navigator.clipboard.writeText(el.textContent);
+  const orig = el.textContent;
+  el.textContent = '✓ copied!';
+  setTimeout(() => { el.textContent = orig; }, 1200);
+}
+function scoreClass(v) {
+  if (v >= 70) return 'high';
+  if (v >= 40) return 'mid';
+  return 'low';
+}
+
+function setContextId(type, id) {
+  const box = document.getElementById('ctx-box');
+  box.style.display = '';
+  const row = document.getElementById('ctx-' + type);
+  row.style.display = '';
+  document.getElementById('ctx-' + type + '-id').textContent = id;
+  if (type === 'job') { sessionJobId = id; document.getElementById('eval-job-id').value = id; }
+  if (type === 'eval') { sessionEvalId = id; document.getElementById('view-eval-id').value = id; }
+}
+
+/* ── Step 1: Create Job ── */
+async function createJob() {
+  const title   = document.getElementById('job-title').value.trim();
+  const company = document.getElementById('job-company').value.trim();
+  const rawText = document.getElementById('job-raw').value.trim();
+
+  if (!title || !rawText) { alert('job-result','error','Title and description are required.'); return; }
+
+  const btn = document.getElementById('btn-create-job');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Parsing with Grok…';
+  setHtml('job-result','');
+
+  try {
+    const res = await fetch('/api/jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, company: company || undefined, rawText }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      alert('job-result','error', '❌ ' + (data?.error?.message ?? 'Unknown error'));
+      return;
+    }
+
+    const job = data.data ?? data;
+    setContextId('job', job.id);
+    document.getElementById('nav-1').classList.add('done');
+    document.getElementById('nav-1').querySelector('.num').textContent = '✓';
+
+    setHtml('job-result', `
+      <div class="alert alert-success">✅ Job created successfully!</div>
+      <div style="margin-top:12px">
+        <div class="section-title">Parsed Requirements</div>
+        <div class="result-grid">
+          <div class="score-card">
+            <div class="score-label">Must-Have Skills</div>
+            <div style="font-size:13px;margin-top:6px">${(job.requirements?.mustHave ?? []).map(s => `<span style="display:inline-block;background:rgba(108,99,255,0.15);color:var(--accent);padding:2px 8px;border-radius:4px;margin:2px;font-size:12px">${s}</span>`).join('') || '—'}</div>
+          </div>
+          <div class="score-card">
+            <div class="score-label">Nice-to-Have Skills</div>
+            <div style="font-size:13px;margin-top:6px">${(job.requirements?.niceToHave ?? []).map(s => `<span style="display:inline-block;background:rgba(245,158,11,0.1);color:var(--yellow);padding:2px 8px;border-radius:4px;margin:2px;font-size:12px">${s}</span>`).join('') || '—'}</div>
+          </div>
+        </div>
+        <div style="margin-top:10px;font-size:12px;color:var(--text-dim)">Job ID: <code style="color:var(--accent)">${job.id}</code></div>
+      </div>
+    `);
+
+    setTimeout(() => switchTab(2), 1400);
+  } catch (e) {
+    alert('job-result','error','Network error: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = 'Create Job &rarr;';
+  }
+}
+
+/* ── Step 2: Submit Resume ── */
+async function submitResume() {
+  const jobId = document.getElementById('eval-job-id').value.trim();
+  const fileInput = document.getElementById('resume-file');
+
+  if (!jobId)             { alert('eval-result','error','Job ID is required.'); return; }
+  if (!fileInput.files[0]){ alert('eval-result','error','Please select a resume file.'); return; }
+
+  const btn = document.getElementById('btn-submit-resume');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Uploading &amp; evaluating…';
+  setHtml('eval-result','');
+
+  const fd = new FormData();
+  fd.append('jobId', jobId);
+  // Force PDF mime type so multer's filter accepts it
+  fd.append('resume', fileInput.files[0], fileInput.files[0].name);
+
+  try {
+    const res = await fetch('/api/evaluations', { method: 'POST', body: fd });
+    const data = await res.json();
+
+    if (!res.ok) {
+      alert('eval-result','error','❌ ' + (data?.error?.message ?? 'Unknown error'));
+      return;
+    }
+
+    const ev = data.data ?? data;
+    setContextId('eval', ev.id);
+    document.getElementById('nav-2').classList.add('done');
+    document.getElementById('nav-2').querySelector('.num').textContent = '✓';
+
+    const statusColor = ev.status === 'complete' || ev.status === 'completed' ? 'green' : ev.status === 'failed' ? 'red' : 'yellow';
+    setHtml('eval-result', `
+      <div class="alert alert-success">✅ Evaluation created! Status: <strong>${ev.status}</strong></div>
+      <div style="margin-top:10px;font-size:12px;color:var(--text-dim)">Evaluation ID: <code style="color:var(--accent)">${ev.id}</code></div>
+      <div style="margin-top:8px;font-size:13px;color:var(--text-dim)">Switching to results tab…</div>
+    `);
+
+    setTimeout(() => { switchTab(3); fetchEvaluation(); }, 1400);
+  } catch (e) {
+    alert('eval-result','error','Network error: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = 'Submit &amp; Evaluate &rarr;';
+  }
+}
+
+/* ── Step 3: View Evaluation ── */
+let pollCount = 0;
+
+async function fetchEvaluation() {
+  const id = document.getElementById('view-eval-id').value.trim();
+  if (!id) { setHtml('poll-status', '<div class="alert alert-warn">Enter an Evaluation ID.</div>'); return; }
+
+  pollCount++;
+  setHtml('poll-status', `<div class="poll-status"><span class="spinner"></span> Fetching… (attempt ${pollCount})</div>`);
+
+  try {
+    const res = await fetch('/api/evaluations/' + id);
+    const data = await res.json();
+
+    if (!res.ok) {
+      setHtml('poll-status', `<div class="alert alert-error">❌ ${data?.error?.message ?? 'Not found'}</div>`);
+      stopAutoPoll();
+      return;
+    }
+
+    const ev = data.data ?? data;
+
+    if (ev.status === 'complete' || ev.status === 'completed') {
+      stopAutoPoll();
+      document.getElementById('nav-3').classList.add('done');
+      document.getElementById('nav-3').querySelector('.num').textContent = '✓';
+      setHtml('poll-status', '<div class="alert alert-success">✅ Evaluation complete!</div>');
+      renderEvaluation(ev);
+    } else if (ev.status === 'failed') {
+      stopAutoPoll();
+      setHtml('poll-status', '<div class="alert alert-error">❌ Evaluation failed. Check server logs.</div>');
+    } else {
+      setHtml('poll-status', `<div class="poll-status"><span style="color:var(--yellow)">⏳</span> Status: <strong>${ev.status}</strong> — auto-polling will refresh automatically.</div>`);
+      setHtml('eval-display', `<div class="alert alert-info">Evaluation is <strong>${ev.status}</strong>. The pipeline is running; this page will update automatically.</div>`);
+    }
+  } catch (e) {
+    setHtml('poll-status', `<div class="alert alert-error">Network error: ${e.message}</div>`);
+  }
+}
+
+function renderEvaluation(ev) {
+  const sc = ev.scoreCard ?? ev.score_card ?? {};
+  const overall = sc.overallScore ?? sc.overall_score ?? 0;
+  const dims = sc.dimensionScores ?? sc.dimension_scores ?? {};
+
+  const tierCls = (t) => ['A','B','C'].includes(t) ? 'tier-' + t : 'tier-C';
+  const tier = ev.tierClassification ?? ev.tier_classification ?? {};
+
+  const qs = ev.interviewQuestions ?? ev.interview_questions ?? [];
+  const verify = ev.verificationResult ?? ev.verification_result ?? {};
+  const summary = ev.executiveSummary ?? ev.executive_summary ?? '';
+
+  const dimCards = Object.entries(dims).map(([key, val]) => {
+    const v = typeof val === 'object' ? (val.value ?? val.score ?? 0) : val;
+    const label = key.replace(/([A-Z])/g,' $1').replace(/_/g,' ').trim();
+    const cls = scoreClass(v);
+    return `
+      <div class="score-card">
+        <div class="score-label">${label}</div>
+        <div class="score-value score-${cls}">${v}<span style="font-size:14px;font-weight:400">/100</span></div>
+        <div class="score-bar-wrap"><div class="score-bar bar-${cls}" style="width:${v}%"></div></div>
+        ${val?.explanation ? `<div style="font-size:12px;color:var(--text-dim);margin-top:6px">${val.explanation}</div>` : ''}
+      </div>`;
+  }).join('');
+
+  const overallCls = scoreClass(overall);
+
+  const qHtml = qs.slice(0,8).map(q => {
+    const type = q.type ?? q.questionType ?? 'technical';
+    const text = q.question ?? q.text ?? q;
+    return `<li>
+      <div class="q-type q-type-${type}">${type}</div>
+      ${text}
+    </li>`;
+  }).join('');
+
+  const ghStatus = verify.github?.verified ? '✅ Verified' : verify.github ? '⚠ Not verified' : '—';
+  const liStatus = verify.linkedin?.verified ? '✅ Verified' : '—';
+
+  setHtml('eval-display', `
+    <!-- Overall score -->
+    <div class="card" style="margin-bottom:16px">
+      <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+        <div>
+          <div class="score-label" style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px">Overall Score</div>
+          <div class="score-value score-${overallCls}" style="font-size:48px;font-weight:800;line-height:1">${overall}<span style="font-size:18px;font-weight:400">/100</span></div>
+        </div>
+        <div>
+          <div class="score-label" style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">Tier</div>
+          <span class="tier-badge ${tierCls(tier.tier ?? tier)}">${tier.tier ?? tier ?? '—'}</span>
+          ${tier.rationale ? `<div style="font-size:12px;color:var(--text-dim);margin-top:6px;max-width:320px">${tier.rationale}</div>` : ''}
+        </div>
+        ${summary ? `<div style="flex:1;min-width:240px;font-size:13px;color:var(--text-dim);line-height:1.6;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px">${summary}</div>` : ''}
+      </div>
+    </div>
+
+    <!-- Dimension scores -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="section-title">Dimension Scores</div>
+      <div class="result-grid">${dimCards || '<div style="color:var(--text-dim);font-size:13px">No dimension data.</div>'}</div>
+    </div>
+
+    <!-- Interview questions -->
+    ${qs.length ? `
+    <div class="card" style="margin-bottom:16px">
+      <div class="section-title">Interview Questions (${qs.length})</div>
+      <ul class="question-list">${qHtml}</ul>
+    </div>` : ''}
+
+    <!-- Verification -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="section-title">Claim Verification</div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:13px">
+        <span>GitHub: <strong>${ghStatus}</strong></span>
+        <span>LinkedIn: <strong>${liStatus}</strong></span>
+        ${verify.overallConfidence != null ? `<span>Confidence: <strong>${verify.overallConfidence}%</strong></span>` : ''}
+      </div>
+    </div>
+
+    <!-- Raw JSON -->
+    <details>
+      <summary>View raw JSON response</summary>
+      <div class="json-block">${JSON.stringify(ev, null, 2)}</div>
+    </details>
+  `);
+}
+
+function toggleAutoPoll() {
+  if (isPolling) {
+    stopAutoPoll();
+  } else {
+    startAutoPoll();
+  }
+}
+
+function startAutoPoll() {
+  isPolling = true;
+  const btn = document.getElementById('btn-autopoll');
+  btn.innerHTML = '⏸ Stop auto-poll';
+  btn.style.borderColor = 'var(--red)';
+  btn.style.color = 'var(--red)';
+  fetchEvaluation();
+  autopollTimer = setInterval(fetchEvaluation, 5000);
+}
+
+function stopAutoPoll() {
+  isPolling = false;
+  clearInterval(autopollTimer);
+  const btn = document.getElementById('btn-autopoll');
+  btn.innerHTML = '▶ Auto-poll every 5s';
+  btn.style.borderColor = '';
+  btn.style.color = '';
+}
+
+/* Auto-start poll if we already have an eval id */
+document.getElementById('view-eval-id').addEventListener('input', e => {
+  if (!e.target.value.trim()) stopAutoPoll();
+});
+</script>
+</body>
+</html>

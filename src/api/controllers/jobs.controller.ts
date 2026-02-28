@@ -38,11 +38,13 @@ export async function createJob(req: Request, res: Response): Promise<void> {
   });
 
   res.status(201).json({
-    jobId,
+    id: jobId,
     title: job.title,
     company: job.company,
-    mustHaveCount: job.requirements.mustHave.length,
-    niceToHaveCount: job.requirements.niceToHave.length,
+    requirements: {
+      mustHave: job.requirements.mustHave,
+      niceToHave: job.requirements.niceToHave,
+    },
     createdAt: job.parsedAt,
   });
 }

@@ -1,45 +1,25 @@
-import {
-  GoogleGenerativeAI,
-  GenerativeModel,
-  HarmCategory,
-  HarmBlockThreshold,
-  TaskType,
-} from '@google/generative-ai';
+/**
+ * Groq client — uses the OpenAI-compatible Groq API for chat completions.
+ * Embeddings are computed locally (Groq does not provide an embeddings endpoint).
+ */
+import OpenAI from 'openai';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
 import { withRetry } from '../../utils/retry';
 import { ExternalServiceError } from '../../utils/errors';
 
-let _genAI: GoogleGenerativeAI | null = null;
+const GROQ_BASE_URL = 'https://api.groq.com/openai/v1';
 
-function getGenAI(): GoogleGenerativeAI {
-  if (!_genAI) {
-    _genAI = new GoogleGenerativeAI(config.gemini.apiKey);
+let _client: OpenAI | null = null;
+
+function getClient(): OpenAI {
+  if (!_client) {
+    _client = new OpenAI({
+      apiKey: config.gemini.apiKey,
+      baseURL: GROQ_BASE_URL,
+    });
   }
-  return _genAI;
-}
-
-/**
- * Returns a Gemini GenerativeModel configured for chat/reasoning.
- * Safety thresholds are set to BLOCK_NONE for professional resume content —
- * resumes mention industries (defence, pharma, weapons) that could otherwise
- * trigger false-positive blocks.
- */
-function getChatModel(): GenerativeModel {
-  return getGenAI().getGenerativeModel({
-    model: config.gemini.chatModel,
-    safetySettings: [
-      { category: HarmCategory.HARM_CATEGORY_HARASSMENT,        threshold: HarmBlockThreshold.BLOCK_NONE },
-      { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,       threshold: HarmBlockThreshold.BLOCK_NONE },
-      { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-      { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-    ],
-    generationConfig: {
-      temperature: 0.2,
-      maxOutputTokens: 8192,
-      responseMimeType: 'application/json', // always return JSON
-    },
-  });
+  return _client;
 }
 
 export interface ChatMessage {
@@ -48,14 +28,10 @@ export interface ChatMessage {
 }
 
 /**
- * Sends a chat completion request to Gemini and returns the raw JSON string.
+ * Sends a chat-completion request to Grok and returns the raw JSON string.
  *
- * Gemini's SDK does not have an explicit "system" role in its chat history —
- * the system prompt is passed as the first `user` turn and immediately followed
- * by a synthetic `model` acknowledgement.  This is the recommended workaround.
- *
- * All calls use `responseMimeType: 'application/json'` so the response is
- * always valid JSON (Gemini enforces this at the model level).
+ * We set `response_format: { type: 'json_object' }` so the model always
+ * returns valid JSON (equivalent to Gemini's `responseMimeType: application/json`).
  */
 export async function chatCompletion(
   messages: ChatMessage[],
@@ -63,42 +39,29 @@ export async function chatCompletion(
 ): Promise<string> {
   const { temperature = 0.2, maxTokens = 8192 } = opts;
 
-  const model = getGenAI().getGenerativeModel({
-    model: config.gemini.chatModel,
-    safetySettings: [
-      { category: HarmCategory.HARM_CATEGORY_HARASSMENT,        threshold: HarmBlockThreshold.BLOCK_NONE },
-      { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,       threshold: HarmBlockThreshold.BLOCK_NONE },
-      { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-      { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-    ],
-    generationConfig: {
-      temperature,
-      maxOutputTokens: maxTokens,
-      responseMimeType: 'application/json',
-    },
-  });
-
-  // Separate system prompt from conversation turns
-  const systemMessage = messages.find((m) => m.role === 'system');
-  const conversationMessages = messages.filter((m) => m.role !== 'system');
-
-  // Build Gemini chat history (all turns except the last, which is the live prompt)
-  const history = buildHistory(systemMessage, conversationMessages.slice(0, -1));
-  const lastMessage = conversationMessages[conversationMessages.length - 1];
-
   const responseText = await withRetry(
     async () => {
-      const chat = model.startChat({ history });
-      const result = await chat.sendMessage(lastMessage?.content ?? '');
-      return result.response.text();
+      const response = await getClient().chat.completions.create({
+        model: config.gemini.chatModel,   // e.g. "grok-3-mini"
+        messages: messages.map((m) => ({
+          role: m.role,
+          content: m.content,
+        })),
+        temperature,
+        max_tokens: maxTokens,
+        response_format: { type: 'json_object' },
+      });
+
+      const content = response.choices[0]?.message?.content ?? '{}';
+      return content;
     },
     { maxAttempts: 3 },
   ).catch((err) => {
-    logger.error('Gemini chat completion failed', { err });
-    throw new ExternalServiceError('Gemini', err instanceof Error ? err.message : undefined);
+    logger.error('Grok chat completion failed', { err });
+    throw new ExternalServiceError('Grok', err instanceof Error ? err.message : undefined);
   });
 
-  logger.debug('Gemini response received', {
+  logger.debug('Grok response received', {
     model: config.gemini.chatModel,
     responseLength: responseText.length,
   });
@@ -107,65 +70,32 @@ export async function chatCompletion(
 }
 
 /**
- * Generates an embedding vector using Gemini's text-embedding-004 model.
- * task_type "RETRIEVAL_DOCUMENT" is used for resume/JD text; callers that
- * query against a corpus should use "RETRIEVAL_QUERY".
+ * Groq does not provide an embeddings API.
+ * We compute a simple local TF (term-frequency) vector so cosine-similarity
+ * scoring still works without any external call.
  */
 export async function createEmbedding(
   text: string,
-  taskType: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY' = 'RETRIEVAL_DOCUMENT',
+  _taskType: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY' = 'RETRIEVAL_DOCUMENT',
 ): Promise<number[]> {
-  // text-embedding-004 supports up to 2048 tokens; truncate conservatively
-  const truncated = text.slice(0, 20_000);
+  const tokens = text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
+  const freq: Record<string, number> = {};
+  for (const t of tokens) freq[t] = (freq[t] ?? 0) + 1;
 
-  const embModel = getGenAI().getGenerativeModel({
-    model: config.gemini.embeddingModel,
-  });
-
-  const result = await withRetry(
-    () =>
-      embModel.embedContent({
-        content: { parts: [{ text: truncated }], role: 'user' },
-        taskType: taskType as unknown as TaskType,
-      }),
-    { maxAttempts: 3 },
-  ).catch((err) => {
-    logger.error('Gemini embedding failed', { err });
-    throw new ExternalServiceError('Gemini Embeddings', err instanceof Error ? err.message : undefined);
-  });
-
-  return result.embedding.values;
+  // Hash each token into a 512-dim vector (random projection style)
+  const dim = 512;
+  const vec = new Array<number>(dim).fill(0);
+  for (const [token, count] of Object.entries(freq)) {
+    let h = 5381;
+    for (let i = 0; i < token.length; i++) h = ((h * 33) ^ token.charCodeAt(i)) >>> 0;
+    vec[h % dim] += count;
+  }
+  // L2-normalise
+  const norm = Math.sqrt(vec.reduce((s, v) => s + v * v, 0)) || 1;
+  return vec.map(v => v / norm);
 }
 
-/* ── Private helpers ─────────────────────────────────────────────────────── */
-
-/**
- * Converts our internal message array into the Gemini SDK's history format.
- *
- * Gemini history entries must alternate user / model.  If a system prompt
- * exists we inject it as a user turn followed by a model acknowledgement so
- * the model "knows" its instructions before the real conversation starts.
- */
-function buildHistory(
-  systemMessage: ChatMessage | undefined,
-  priorMessages: ChatMessage[],
-): Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> {
-  const history: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
-
-  if (systemMessage) {
-    history.push({ role: 'user',  parts: [{ text: systemMessage.content }] });
-    history.push({ role: 'model', parts: [{ text: 'Understood. I will follow these instructions.' }] });
-  }
-
-  for (const msg of priorMessages) {
-    history.push({
-      role: msg.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: msg.content }],
-    });
-  }
-
-  return history;
+// Stub kept for any future streaming usage
+export function getChatModel(): null {
+  return null;
 }
-
-// Re-export getChatModel for internal use in streaming scenarios (future)
-export { getChatModel };

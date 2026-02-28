@@ -70,7 +70,7 @@ export async function generateQuestionsAndSummary(
   tier: TierClassification,
   verification: VerificationResult | null,
 ): Promise<GeneratedContent> {
-  const questionCount = tier.tier === 'A' ? 8 : tier.tier === 'B' ? 6 : 5;
+  const questionCount = 5;
 
   const userPrompt = buildPrompt(resume, jd, scoreCard, tier, verification, questionCount);
 
@@ -86,7 +86,7 @@ export async function generateQuestionsAndSummary(
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: userPrompt },
     ],
-    { temperature: 0.4, maxTokens: 4096 },
+    { temperature: 0.4, maxTokens: 2048 },
   );
 
   let parsed: Record<string, unknown>;

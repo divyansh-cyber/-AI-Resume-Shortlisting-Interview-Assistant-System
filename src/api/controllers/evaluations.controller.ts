@@ -88,7 +88,7 @@ export async function createEvaluation(req: Request, res: Response): Promise<voi
 
   // Return 202 immediately — pipeline continues in background
   res.status(202).json({
-    evaluationId: evaluation.id,
+    id: evaluation.id,
     candidateId,
     jobId: body.jobId,
     status: 'pending',
@@ -163,26 +163,25 @@ async function runEvaluationPipeline(opts: PipelineOptions): Promise<void> {
   const { evaluationId, parsedResume, jd, skipVerification } = opts;
 
   try {
-    // ── Step 1: Scoring ────────────────────────────────────────────────────
+    // ── Steps 1 & 2 in parallel: Scoring + Verification ───────────────────
     await evaluationRepository.updateStatus(evaluationId, 'scoring');
-    const scoreCard = await runScoringEngine(parsedResume, jd);
+
+    const [scoreCard, verification] = await Promise.all([
+      runScoringEngine(parsedResume, jd),
+      runVerification(parsedResume, { skipVerification }),
+    ]);
+
     const tier = classifyTier(scoreCard);
-    await evaluationRepository.updateScoring(evaluationId, scoreCard, tier);
+
+    await Promise.all([
+      evaluationRepository.updateScoring(evaluationId, scoreCard, tier),
+      evaluationRepository.updateVerification(evaluationId, verification),
+    ]);
 
     logger.info('Scoring complete', {
       evaluationId,
       overallScore: scoreCard.overallScore,
       tier: tier.tier,
-    });
-
-    // ── Step 2: Verification ───────────────────────────────────────────────
-    await evaluationRepository.updateStatus(evaluationId, 'verifying');
-    const verification = await runVerification(parsedResume, { skipVerification });
-    await evaluationRepository.updateVerification(evaluationId, verification);
-
-    logger.info('Verification complete', {
-      evaluationId,
-      confidence: verification.overallConfidence,
     });
 
     // ── Step 3: Question generation ────────────────────────────────────────

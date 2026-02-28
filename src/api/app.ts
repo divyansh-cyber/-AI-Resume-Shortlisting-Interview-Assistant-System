@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import cors from 'cors';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
+import path from 'path';
 
 import { config } from '../config';
 import { logger } from '../utils/logger';
@@ -16,8 +17,25 @@ export function createApp(): Application {
   const app = express();
 
   // ── Security middleware ────────────────────────────────────────────────────
-  app.use(helmet());
+  app.use(
+    helmet({
+      // Relax CSP so the frontend can fetch the same-origin API
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'", "'unsafe-inline'"],
+          scriptSrcAttr: ["'unsafe-inline'"],
+          styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+          fontSrc: ["'self'", 'https://fonts.gstatic.com'],
+          connectSrc: ["'self'"],
+        },
+      },
+    }),
+  );
   app.use(cors());
+
+  // ── Static frontend ( public/ ) ───────────────────────────────────
+  app.use(express.static(path.join(__dirname, '..', '..', 'public')));
 
   // ── Request logging ───────────────────────────────────────────────────────
   if (!config.server.isTest) {

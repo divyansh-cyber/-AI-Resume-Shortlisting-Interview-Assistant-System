@@ -11,10 +11,8 @@ const envSchema = z.object({
   PORT: z.string().default('3000'),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
 
-  // Gemini
-  GEMINI_API_KEY: z.string().min(1, 'GEMINI_API_KEY is required'),
-  GEMINI_CHAT_MODEL: z.string().default('gemini-1.5-pro'),
-  GEMINI_EMBEDDING_MODEL: z.string().default('text-embedding-004'),
+  // Groq API key
+  GROK_API_KEY: z.string().min(1, 'GROK_API_KEY is required'),
 
   // PostgreSQL
   DATABASE_URL: z.string().url().optional(),
@@ -56,9 +54,9 @@ export const config = {
     isTest: env.NODE_ENV === 'test',
   },
   gemini: {
-    apiKey: env.GEMINI_API_KEY,
-    chatModel: env.GEMINI_CHAT_MODEL,
-    embeddingModel: env.GEMINI_EMBEDDING_MODEL,
+    apiKey: env.GROK_API_KEY,
+    chatModel: 'llama-3.3-70b-versatile',
+    embeddingModel: '',
   },
   postgres: {
     connectionString: env.DATABASE_URL,
