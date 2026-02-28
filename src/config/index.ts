@@ -11,10 +11,10 @@ const envSchema = z.object({
   PORT: z.string().default('3000'),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
 
-  // OpenAI
-  OPENAI_API_KEY: z.string().min(1, 'OPENAI_API_KEY is required'),
-  OPENAI_CHAT_MODEL: z.string().default('gpt-4o'),
-  OPENAI_EMBEDDING_MODEL: z.string().default('text-embedding-3-small'),
+  // Gemini
+  GEMINI_API_KEY: z.string().min(1, 'GEMINI_API_KEY is required'),
+  GEMINI_CHAT_MODEL: z.string().default('gemini-1.5-pro'),
+  GEMINI_EMBEDDING_MODEL: z.string().default('text-embedding-004'),
 
   // PostgreSQL
   DATABASE_URL: z.string().url().optional(),
@@ -55,10 +55,10 @@ export const config = {
     isProd: env.NODE_ENV === 'production',
     isTest: env.NODE_ENV === 'test',
   },
-  openai: {
-    apiKey: env.OPENAI_API_KEY,
-    chatModel: env.OPENAI_CHAT_MODEL,
-    embeddingModel: env.OPENAI_EMBEDDING_MODEL,
+  gemini: {
+    apiKey: env.GEMINI_API_KEY,
+    chatModel: env.GEMINI_CHAT_MODEL,
+    embeddingModel: env.GEMINI_EMBEDDING_MODEL,
   },
   postgres: {
     connectionString: env.DATABASE_URL,
