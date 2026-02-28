@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { ZodError } from 'zod';
 import { isAppError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 
@@ -16,6 +17,19 @@ export function errorHandler(
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   _next: NextFunction,
 ): void {
+  // Zod validation errors → 400 Bad Request
+  if (err instanceof ZodError) {
+    logger.warn('Validation error', { method: req.method, path: req.path, issues: err.issues });
+    res.status(400).json({
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Request validation failed.',
+        details: err.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+      },
+    });
+    return;
+  }
+
   if (isAppError(err)) {
     if (err.statusCode >= 500) {
       logger.error('Application error', {
