@@ -186,7 +186,7 @@ function computeNiceToHaveBonus(resume: ParsedResume, jd: JobDescription): numbe
 function buildExplanation(
   score: number,
   notableMatches: SkillPair[],
-  niceToHave: string[],
+  _niceToHave: string[],
 ): string {
   const tier =
     score >= 80 ? 'Strong semantic alignment' :

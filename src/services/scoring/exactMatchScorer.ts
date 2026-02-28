@@ -81,8 +81,8 @@ const ALIASES: Record<string, string[]> = {
   amazonaws:    ['aws'],
   googlecloud:  ['gcp'],
   microsoftazure: ['azure'],
-  rabbitmq:     ['rabbit'],
-  apache kafka: ['kafka'],
+  rabbitmq:       ['rabbit'],
+  'apache kafka': ['kafka'],
 };
 
 function hasAliasMatch(normSkill: string, candidateSkills: Set<string>): boolean {

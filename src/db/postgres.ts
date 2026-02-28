@@ -43,7 +43,7 @@ export function getPostgresPool(): Pool {
 /**
  * Convenience wrapper — runs a single parameterised query.
  */
-export async function query<T extends Record<string, unknown> = Record<string, unknown>>(
+export async function query<T extends object = Record<string, unknown>>(
   text: string,
   params?: unknown[],
 ): Promise<QueryResult<T>> {

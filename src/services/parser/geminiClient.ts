@@ -3,6 +3,7 @@ import {
   GenerativeModel,
   HarmCategory,
   HarmBlockThreshold,
+  TaskType,
 } from '@google/generative-ai';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
@@ -125,7 +126,7 @@ export async function createEmbedding(
     () =>
       embModel.embedContent({
         content: { parts: [{ text: truncated }], role: 'user' },
-        taskType: taskType as Parameters<typeof embModel.embedContent>[0]['taskType'],
+        taskType: taskType as unknown as TaskType,
       }),
     { maxAttempts: 3 },
   ).catch((err) => {
