@@ -8,19 +8,19 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --bg: #0f1117;
-      --surface: #1a1d27;
-      --surface2: #22263a;
-      --border: #2e3350;
+      --bg: #1c1f2e;
+      --surface: #252839;
+      --surface2: #2e3248;
+      --border: #3f4466;
       --accent: #6c63ff;
       --accent-dim: #4d46cc;
       --green: #22c55e;
       --red: #ef4444;
       --yellow: #f59e0b;
       --text: #e2e8f0;
-      --text-dim: #8892a4;
+      --text-dim: #9aa3b8;
       --radius: 12px;
-      --shadow: 0 4px 24px rgba(0,0,0,0.4);
+      --shadow: 0 4px 24px rgba(0,0,0,0.3);
     }
 
     body {
@@ -412,7 +412,6 @@
 
         <div style="display:flex;gap:10px;flex-wrap:wrap">
           <button class="btn btn-primary" onclick="fetchEvaluation()">Fetch Result</button>
-          <button class="btn btn-ghost" id="btn-autopoll" onclick="toggleAutoPoll()">▶ Auto-poll every 5s</button>
         </div>
         <div id="poll-status" style="margin-top:12px"></div>
         <div id="eval-display" style="margin-top:16px"></div>
@@ -426,8 +425,6 @@
 /* ── State ── */
 let sessionJobId   = null;
 let sessionEvalId  = null;
-let autopollTimer  = null;
-let isPolling      = false;
 
 /* ── Tab switching ── */
 function switchTab(n) {
@@ -593,17 +590,15 @@ async function fetchEvaluation() {
     const ev = data.data ?? data;
 
     if (ev.status === 'complete' || ev.status === 'completed') {
-      stopAutoPoll();
       document.getElementById('nav-3').classList.add('done');
       document.getElementById('nav-3').querySelector('.num').textContent = '✓';
       setHtml('poll-status', '<div class="alert alert-success">✅ Evaluation complete!</div>');
       renderEvaluation(ev);
     } else if (ev.status === 'failed') {
-      stopAutoPoll();
       setHtml('poll-status', '<div class="alert alert-error">❌ Evaluation failed. Check server logs.</div>');
     } else {
-      setHtml('poll-status', `<div class="poll-status"><span style="color:var(--yellow)">⏳</span> Status: <strong>${ev.status}</strong> — auto-polling will refresh automatically.</div>`);
-      setHtml('eval-display', `<div class="alert alert-info">Evaluation is <strong>${ev.status}</strong>. The pipeline is running; this page will update automatically.</div>`);
+      setHtml('poll-status', `<div class="poll-status">⏳ Status: <strong>${ev.status}</strong> — still processing, click Fetch Result again shortly.</div>`);
+      setHtml('eval-display', `<div class="alert alert-info">Evaluation is <strong>${ev.status}</strong>. Click <strong>Fetch Result</strong> in a few seconds.</div>`);
     }
   } catch (e) {
     setHtml('poll-status', `<div class="alert alert-error">Network error: ${e.message}</div>`);
@@ -613,7 +608,14 @@ async function fetchEvaluation() {
 function renderEvaluation(ev) {
   const sc = ev.scoreCard ?? ev.score_card ?? {};
   const overall = sc.overallScore ?? sc.overall_score ?? 0;
-  const dims = sc.dimensionScores ?? sc.dimension_scores ?? {};
+  const dims = Object.fromEntries(
+    [
+      ['Exact Match', sc.exactMatchScore],
+      ['Semantic Similarity', sc.semanticSimilarityScore],
+      ['Achievement', sc.achievementScore],
+      ['Ownership', sc.ownershipScore],
+    ].filter(([, v]) => v != null)
+  );
 
   const tierCls = (t) => ['A','B','C'].includes(t) ? 'tier-' + t : 'tier-C';
   const tier = ev.tierClassification ?? ev.tier_classification ?? {};
@@ -697,36 +699,13 @@ function renderEvaluation(ev) {
   `);
 }
 
-function toggleAutoPoll() {
-  if (isPolling) {
-    stopAutoPoll();
-  } else {
-    startAutoPoll();
-  }
-}
+function toggleAutoPoll() {}
+function startAutoPoll() {}
+function stopAutoPoll() {}
 
-function startAutoPoll() {
-  isPolling = true;
-  const btn = document.getElementById('btn-autopoll');
-  btn.innerHTML = '⏸ Stop auto-poll';
-  btn.style.borderColor = 'var(--red)';
-  btn.style.color = 'var(--red)';
-  fetchEvaluation();
-  autopollTimer = setInterval(fetchEvaluation, 5000);
-}
-
-function stopAutoPoll() {
-  isPolling = false;
-  clearInterval(autopollTimer);
-  const btn = document.getElementById('btn-autopoll');
-  btn.innerHTML = '▶ Auto-poll every 5s';
-  btn.style.borderColor = '';
-  btn.style.color = '';
-}
-
-/* Auto-start poll if we already have an eval id */
+/* Auto-fetch when eval id is pasted */
 document.getElementById('view-eval-id').addEventListener('input', e => {
-  if (!e.target.value.trim()) stopAutoPoll();
+  if (e.target.value.trim().length === 36) fetchEvaluation();
 });
 </script>
 </body>
