@@ -1,4 +1,5 @@
 # AI Resume Shortlisting & Interview Assistant System
+Demo link :  https://drive.google.com/file/d/1hC9xrfCGd-qvvEGQth5ou5rXUkqE24l-/view?usp=drivesdk
 
 A production-ready TypeScript/Node.js API that automates the end-to-end candidate evaluation pipeline: parse job descriptions and resumes with a large language model, score candidates across four dimensions, verify GitHub and LinkedIn profiles, classify candidates into tiers, and generate personalised interview questions — all in a single async REST workflow.
 
