@@ -1,7 +1,8 @@
 # AI Resume Shortlisting & Interview Assistant System
 Demo link :  https://drive.google.com/file/d/1hC9xrfCGd-qvvEGQth5ou5rXUkqE24l-/view?usp=drivesdk
-
 A production-ready TypeScript/Node.js API that automates the end-to-end candidate evaluation pipeline: parse job descriptions and resumes with a large language model, score candidates across four dimensions, verify GitHub and LinkedIn profiles, classify candidates into tiers, and generate personalised interview questions — all in a single async REST workflow.
+
+> **AI Provider:** [Groq](https://console.groq.com) — `llama-3.3-70b-versatile` for all LLM tasks. Embeddings are computed locally (no external embedding API required).
 
 ---
 
@@ -103,9 +104,9 @@ Converting raw PDF files to structured, queryable data happens in two sequential
 
 The uploaded PDF binary is passed to `pdf-parse` which strips formatting and returns plain UTF-8 text. No OCR is involved — `pdf-parse` works on text-layer PDFs (covers the vast majority of modern resumes). The raw text is stored in the database as-is for audit and re-parsing purposes.
 
-**Step 2 — LLM Structured Extraction (Gemini 1.5 Pro, JSON mode)**
+**Step 2 — LLM Structured Extraction (Groq `llama-3.3-70b-versatile`, JSON mode)**
 
-The raw text is sent to Gemini 1.5 Pro with a system prompt that instructs it to return a strict JSON object matching the `ParsedResume` schema. The Gemini API is called with `responseMimeType: "application/json"` which enables JSON mode — the model is constrained to emit valid JSON and never produces prose outside the JSON envelope.
+The raw text is sent to Groq with a system prompt that instructs it to return a strict JSON object matching the `ParsedResume` schema. The Groq API is OpenAI-compatible and is called with `response_format: { type: 'json_object' }` which enables JSON mode — the model is constrained to emit valid JSON and never produces prose outside the JSON envelope.
 
 The system prompt includes:
 - The exact TypeScript interface as a comment (field names, types, and descriptions)
@@ -125,7 +126,7 @@ PDF binary
     ▼  pdf-parse
 Raw UTF-8 text  ──► stored as resume.rawText
     │
-    ▼  Gemini 1.5 Pro (JSON mode) + Zod validation
+    ▼  Groq llama-3.3-70b-versatile (JSON mode) + Zod validation
 ParsedResume {                    ┐
   skills: { technical, soft }    │
   experience: WorkExperience[]   │  ← validated, typed, persisted
@@ -147,22 +148,23 @@ Job descriptions follow the same two-step process (raw text → Gemini → Zod �
 
 ## AI Strategy
 
-### LLM: Google Gemini 1.5 Pro
+### LLM: Groq `llama-3.3-70b-versatile`
 
-Gemini 1.5 Pro is used for all generative tasks:
+Groq is used for all generative tasks via its OpenAI-compatible API:
 
-| Task | Why Gemini 1.5 Pro |
+| Task | Why Groq llama-3.3-70b |
 |---|---|
-| Resume + JD parsing | 1M-token context window handles any resume length; JSON mode guarantees structured output |
+| Resume + JD parsing | Fast inference with JSON mode guarantees structured output |
 | Interview question generation | Strong instruction-following with `temperature: 0.4` for controlled creativity |
-| Prompt injection defence | System prompt injected as a user+model turn pair (Gemini 1.5 does not have a native system role), preventing role-confusion attacks |
+| Cost | Groq free tier is sufficient for development and moderate production usage |
 
-### Embedding Model: `text-embedding-004`
+### Embedding Model: Local TF-Hash Vectors
 
-Google's `text-embedding-004` is used for the Semantic Similarity dimension:
-- **Task type `RETRIEVAL_DOCUMENT`** for the resume text (indexed side)
-- **Task type `RETRIEVAL_QUERY`** for the JD text (query side)
-- Embeddings are **1536-dimensional** vectors; cosine similarity is computed in-process with a simple dot-product loop (no vector DB needed at this scale)
+Embeddings for the Semantic Similarity dimension are computed **locally** using a term-frequency hash projection into a 512-dimensional vector space:
+- No external API call or cost
+- Deterministic — same text always produces the same vector
+- Vectors are **L2-normalised**; cosine similarity is computed in-process
+- Cached in Redis keyed by a hash of the text (same cache strategy as before)
 
 ### Semantic Similarity: Handling Kafka → RabbitMQ and Similar Equivalences
 
@@ -197,7 +199,7 @@ When the embedding similarity between a resume skill and a JD skill falls below 
 
 ### Safety Settings
 
-All Gemini calls use `BLOCK_NONE` safety thresholds for all four harm categories. This is intentional — resume text may contain benign content that triggers false positives in safety filters (e.g. describing security research, military experience, medical terminology).
+All Groq calls use default safety settings. Resume text occasionally triggers false positives in safety filters (security research, military experience, medical terminology) — if needed, prompt wording can be adjusted to avoid filter trips.
 
 ---
 
@@ -205,7 +207,7 @@ All Gemini calls use `BLOCK_NONE` safety thresholds for all four harm categories
 
 ### Current Architecture Capacity
 
-The current single-instance deployment can comfortably process ~200–500 evaluations/hour because each evaluation makes 3–5 Gemini API calls (PDF parse + resume parse + embedding + question generation) and the bottleneck is Gemini API throughput, not the application server.
+The current single-instance deployment can comfortably process ~200–500 evaluations/hour because each evaluation makes 2–3 Groq API calls (JD parse + resume parse + question generation) and the bottleneck is Groq API throughput, not the application server.
 
 To reach **10,000+ resumes per day** (~420/hour peak) the following changes are required:
 
@@ -228,7 +230,7 @@ POST /api/evaluations
                         └────────────────────────────┘
 ```
 
-**BullMQ** (backed by Redis) is the recommended choice — it supports retry-with-backoff, dead-letter queues, job prioritisation, and rate limiting per queue, all of which are needed to stay within Gemini API quotas.
+**BullMQ** (backed by Redis) is the recommended choice — it supports retry-with-backoff, dead-letter queues, job prioritisation, and rate limiting per queue, all of which are needed to stay within Groq API quotas.
 
 ### 2. Horizontal Worker Scaling
 
@@ -285,7 +287,7 @@ Gemini API has per-minute request and token quotas. At scale:
 | Queue | none (in-process) | BullMQ on Redis |
 | PostgreSQL | single instance | primary + 1 read replica |
 | Redis | single instance | Redis Cluster or ElastiCache |
-| Gemini API | shared quota | dedicated project quota |
+| Groq API | shared quota | dedicated org quota |
 | Estimated throughput | ~500/day | 40,000+/day |
 
 ---
@@ -296,7 +298,8 @@ Gemini API has per-minute request and token quotas. At scale:
 |---|---|
 | Runtime | Node.js ≥ 18, TypeScript 5.3 |
 | HTTP Framework | Express 4 + `express-async-errors` |
-| LLM | Google Gemini 1.5 Pro (chat) + `text-embedding-004` (embeddings) |
+| LLM | Groq `llama-3.3-70b-versatile` (chat + JSON mode) |
+| Embeddings | Local TF-hash projection (512-dim, no external API) |
 | Database | PostgreSQL 16 via `pg` pool |
 | Cache | Redis 7 via `ioredis` |
 | PDF Parsing | `pdf-parse` |
@@ -395,7 +398,7 @@ tests/
 ### Prerequisites
 
 - **Docker & Docker Compose** (recommended) _or_ Node.js ≥ 18, PostgreSQL 16, Redis 7
-- A **Google AI API key** with access to Gemini 1.5 Pro — [get one free](https://aistudio.google.com/app/apikey)
+- A **Groq API key** — [get one free at console.groq.com](https://console.groq.com)
 - (Optional) A **GitHub personal access token** for higher API rate limits
 
 ### Environment Variables
@@ -408,11 +411,14 @@ cp .env.example .env
 
 | Variable | Required | Description |
 |---|---|---|
-| `GEMINI_API_KEY` | ✅ | Google AI Studio API key |
-| `GEMINI_CHAT_MODEL` | ✅ | e.g. `gemini-1.5-pro` |
-| `GEMINI_EMBEDDING_MODEL` | ✅ | e.g. `text-embedding-004` |
-| `DATABASE_URL` | ✅ | PostgreSQL connection string |
-| `REDIS_URL` | ✅ | Redis connection string |
+| `GROK_API_KEY` | ✅ | Groq API key from [console.groq.com](https://console.groq.com) |
+| `POSTGRES_HOST` | ✅ | PostgreSQL host (default `localhost`) |
+| `POSTGRES_PORT` | ✅ | PostgreSQL port (default `5433` when Docker local Postgres conflicts) |
+| `POSTGRES_DB` | ✅ | Database name (default `resume_system`) |
+| `POSTGRES_USER` | ✅ | Database user (default `postgres`) |
+| `POSTGRES_PASSWORD` | ✅ | Database password (default `postgres`) |
+| `REDIS_HOST` | ✅ | Redis host (default `localhost`) |
+| `REDIS_PORT` | ✅ | Redis port (default `6379`) |
 | `PORT` | — | HTTP port (default `3000`) |
 | `NODE_ENV` | — | `development` / `production` / `test` |
 | `GITHUB_TOKEN` | — | GitHub PAT (raises rate limit to 5 000 req/h) |
@@ -428,15 +434,17 @@ cd -AI-Resume-Shortlisting-Interview-Assistant-System
 
 # 2. Configure environment
 cp .env.example .env
-#    → edit .env and set at minimum GEMINI_API_KEY, GEMINI_CHAT_MODEL, GEMINI_EMBEDDING_MODEL
+#    → edit .env and set GROK_API_KEY=gsk_...
 
-# 3. Start all services (API + PostgreSQL + Redis)
-docker compose up --build
+# 3. Start only DB services (local dev — avoids port 5432 conflict with local Postgres)
+docker-compose up -d postgres redis
 
-# 4. The API is now available at http://localhost:3000
+# 4. Start the API in dev mode
+npm run dev
+
+# 5. Open the frontend
+#    http://localhost:3000
 ```
-
-The Compose file runs `npm run migrate` inside the API container before starting the server, so the schema is always up to date.
 
 ### Running Locally (without Docker)
 
@@ -444,12 +452,8 @@ The Compose file runs `npm run migrate` inside the API container before starting
 # Install dependencies
 npm install
 
-# Start PostgreSQL and Redis separately, then:
-export DATABASE_URL="postgresql://user:pass@localhost:5432/jane_health"
-export REDIS_URL="redis://localhost:6379"
-
-# Run database migrations
-npm run migrate
+# Start PostgreSQL and Redis via Docker
+docker-compose up -d postgres redis
 
 # Start in development mode (hot-reload)
 npm run dev
@@ -500,7 +504,7 @@ Content-Type: application/json
 |---|---|---|---|
 | `title` | string | ✅ | max 200 chars |
 | `company` | string | — | max 200 chars |
-| `rawText` | string | ✅ | min 50 chars; full JD text sent to Gemini |
+| `rawText` | string | ✅ | min 50 chars; full JD text sent to Groq |
 
 **Response 201**
 ```json
@@ -663,7 +667,7 @@ Each resume is evaluated across **four dimensions** that are combined into a wei
 | Dimension | Weight | Description |
 |---|---|---|
 | **Exact Match** | 35% | Keyword-level overlap between resume skills and JD `mustHave` list. Includes an alias table (`pg = postgres = postgresql`, `k8s = kubernetes`, `tf = terraform`, etc.). |
-| **Semantic Similarity** | 30% | Cosine similarity between Gemini `text-embedding-004` embeddings of the resume raw text and JD raw text. Cached in Redis per content hash. |
+| **Semantic Similarity** | 30% | Cosine similarity between locally-computed TF-hash embeddings of the resume and JD text. Cached in Redis per content hash. |
 | **Achievement** | 20% | Sigmoid-scaled detection of quantifiable achievements (%, $, ×), strong action verbs (launched, architected, drove), and explicit certifications. |
 | **Ownership** | 15% | Detects individual contributor signals (led, owned, built alone, responsible for) in work experience descriptions and project ownership fields. |
 
@@ -710,9 +714,8 @@ Profile verification is **advisory** — it adjusts confidence, not the score. I
 
 ## Interview Question Generator
 
-After scoring and verification, Gemini 1.5 Pro generates personalised interview questions tailored to:
+After scoring and verification, Groq `llama-3.3-70b-versatile` generates 5 personalised interview questions tailored to:
 
-- The candidate's **tier** (A → 8 questions, B → 6 questions, C → 5 questions)
 - **Gaps** identified in the scoring phase
 - **Ownership signals** detected — senior candidates get system-design and leadership questions
 - **Unverified claims** flagged by the verification engine
